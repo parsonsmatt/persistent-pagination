@@ -1,11 +1,15 @@
 {-# LANGUAGE GADTs #-}
+{-# LANGUAGE DeriveFunctor #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE RankNTypes #-}
 
+-- | This module provides efficient pagination over your database queries.
+-- No @OFFSET@ here - we use ranges to do this right!
 module Database.Persist.Pagination where
 
+import Control.Applicative
 import Conduit
 import Data.Foldable
 import Control.Applicative (Const(..))
@@ -17,10 +21,19 @@ import qualified Control.Foldl as Foldl
 import Lens.Micro
 
 newtype PageSize = PageSize { unPageSize :: Int }
+    deriving (Eq, Show)
 
 data SortOrder = Ascend | Descend
+    deriving (Eq, Show)
 
+-- | A datatype describing the min and max of a non-empty sequence of
+-- records.
 data Range t = Range { rangeMin :: t, rangeMax :: t }
+    deriving (Eq, Show, Functor)
+
+-- | Users aren't required to put a value in for the range - a value of
+-- 'Nothing' is equivalent to saying "unbounded from below."
+type DesiredRange t = Range (Maybe t)
 
 instance Ord t => Semigroup (Range t) where
     Range l h <> Range l' h' = Range (min l l') (max h h')
@@ -30,16 +43,22 @@ data Page record typ
     { pageRecords :: [Entity record]
     , pageRecordCount :: Int
     , pageRange :: Range typ
-    , pageDesiredRange :: Range typ
+    , pageDesiredRange :: DesiredRange typ
     , pageField :: EntityField record typ
     , pageFilters :: [Filter record]
     , pageSize :: PageSize
     , pageSortOrder :: SortOrder
     }
 
-rangeToFilters :: PersistField typ => Range typ -> EntityField record typ -> [Filter record]
+rangeToFilters
+    :: PersistField typ
+    => Range (Maybe typ)
+    -> EntityField record typ
+    -> [Filter record]
 rangeToFilters range field =
-    [field >=. rangeMin range, field <. rangeMax range]
+    fmap (\m -> field >. m) (toList (rangeMin range))
+    ++
+    fmap (\m -> field <. m) (toList (rangeMax range))
 
 getPage
     :: forall record backend typ m.
@@ -59,7 +78,7 @@ getPage
     -- ^ How many records in a page
     -> SortOrder
     -- ^ Ascending or descending
-    -> Range typ
+    -> DesiredRange typ
     -- ^ The desired range
     -> ReaderT backend m (Maybe (Page record typ))
 getPage filts field pageSize sortOrder desiredRange = do
@@ -106,23 +125,32 @@ nextPage
     , MonadIO m
     )
     => Page record typ -> ReaderT backend m (Maybe (Page record typ))
-nextPage Page{..} =
-    getPage
-        pageFilters
-        pageField
-        pageSize
-        pageSortOrder
-        bumpPageRange
-  where
-    bumpPageRange =
-        case pageSortOrder of
-            Ascend ->
-                pageDesiredRange { rangeMin = rangeMax pageRange }
-            Descend ->
-                pageDesiredRange { rangeMax = rangeMin pageRange }
+nextPage Page{..}
+    | pageRecordCount < unPageSize pageSize =
+        pure Nothing
+    | otherwise =
+        getPage
+            pageFilters
+            pageField
+            pageSize
+            pageSortOrder
+            (bumpPageRange pageSortOrder pageDesiredRange pageRange)
+
+bumpPageRange
+    :: Ord typ
+    => SortOrder
+    -> DesiredRange typ
+    -> Range typ
+    -> DesiredRange typ
+bumpPageRange sortOrder (Range mmin mmax) (Range min' max') =
+    case sortOrder of
+        Ascend ->
+            Range (mmin `max` Just max') mmax
+        Descend ->
+            Range mmin (Just min' <|> (Just min' `min` mmax))
 
 streamEntities
-    :: forall record backend typ m.
+    :: forall record backend typ m a.
     ( PersistEntity record
     , PersistEntityBackend record ~ backend
     , PersistQueryRead backend
@@ -139,9 +167,9 @@ streamEntities
     -- ^ How many records in a page
     -> SortOrder
     -- ^ Ascending or descending
-    -> Range typ
+    -> DesiredRange typ
     -- ^ The desired range
-    -> ConduitT Void (Entity record) (ReaderT backend m) ()
+    -> ConduitT a (Entity record) (ReaderT backend m) ()
 streamEntities filters field pageSize sortOrder range = do
     mpage <- lift (getPage filters field pageSize sortOrder range)
     forM_ mpage loop
