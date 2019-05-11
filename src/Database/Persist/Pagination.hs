@@ -55,11 +55,9 @@ import           Lens.Micro
 -- @since 0.1.0.0
 streamEntities
     :: forall record backend typ m a.
-    ( PersistEntity record
-    , PersistEntityBackend record ~ backend
+    ( PersistRecordBackend record backend
     , PersistQueryRead backend
     , Ord typ
-    , BaseBackend backend ~ backend
     , PersistField typ
     , MonadIO m
     )
@@ -113,6 +111,7 @@ instance Ord t => Semigroup (Range t) where
 
 instance (Bounded t, Ord t) => Monoid (Range t) where
     mempty = Range minBound maxBound
+    mappend = (<>)
 
 -- | Users aren't required to put a value in for the range - a value of
 -- 'Nothing' is equivalent to saying "unbounded from below."
@@ -197,11 +196,9 @@ rangeToFilters range field =
 -- @since 0.1.0.0
 getPage
     :: forall record backend typ m.
-    ( PersistEntity record
-    , PersistEntityBackend record ~ backend
+    ( PersistRecordBackend record backend
     , PersistQueryRead backend
     , Ord typ
-    , BaseBackend backend ~ backend
     , PersistField typ
     , MonadIO m
     )
@@ -264,11 +261,10 @@ getPage filts field pageSize sortOrder desiredRange = do
 --
 -- @since 0.1.0.0
 nextPage
-    :: ( PersistEntity record
-    , PersistEntityBackend record ~ backend
+    ::
+    ( PersistRecordBackend record backend
     , PersistQueryRead backend
     , Ord typ
-    , BaseBackend backend ~ backend
     , PersistField typ
     , MonadIO m
     )
