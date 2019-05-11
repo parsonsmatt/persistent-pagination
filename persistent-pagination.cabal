@@ -2,6 +2,7 @@ cabal-version: 1.12
 
 name:           persistent-pagination
 version:        0.1.0.0
+synopsis:       Efficient and correct pagination for persistent queries.
 description:    Please see the README on GitHub at <https://github.com/parsonsmatt/persistent-pagination#readme>
 homepage:       https://github.com/parsonsmatt/persistent-pagination#readme
 bug-reports:    https://github.com/parsonsmatt/persistent-pagination/issues
@@ -11,6 +12,7 @@ copyright:      2019 Matt Parsons
 license:        BSD3
 license-file:   LICENSE
 build-type:     Simple
+category:       Database
 extra-source-files:
     README.md
     ChangeLog.md
@@ -28,7 +30,7 @@ library
       src
   build-depends:
       base >=4.11 && <5
-    , persistent
+    , persistent >= 2 && < 3.0
     , conduit >= 1.2.8 && < 1.4
     , mtl < 3
     , foldl < 1.5.0
