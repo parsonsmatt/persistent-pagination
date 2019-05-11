@@ -1,5 +1,7 @@
 # persistent-pagination
 
+[![Build Status](https://travis-ci.org/parsonsmatt/persistent-pagination.svg?branch=master)](https://travis-ci.org/parsonsmatt/persistent-pagination) ![Hackage-Deps](https://img.shields.io/hackage-deps/v/persistent-pagination.svg)
+
 A library that provides Correct pagination behavior.
 
 # Why not use `LIMIT/OFFSET`?
