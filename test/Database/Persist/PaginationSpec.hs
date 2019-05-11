@@ -6,6 +6,7 @@
 module Database.Persist.PaginationSpec where
 
 import qualified Data.Set as Set
+import qualified Data.Map as Map
 import qualified Data.List as List
 import Control.Concurrent
 import Conduit
@@ -106,6 +107,40 @@ spec = do
 
         List.group sortedKeys `shouldBe` map pure sortedKeys
 
+    it "works for id" $ do
+        (records0, records1) <-
+            runDb $
+                (,) <$> do
+                    runConduit
+                        $ streamEntities
+                            []
+                            UserId
+                            (PageSize 10)
+                            Ascend
+                            (Range Nothing Nothing)
+                        .| sinkList
+                    <*> do
+                        selectList [] []
+        length (Set.fromList records0)
+            `shouldBe`
+                entityCount
+        let mkMap = Map.fromList . map (\e -> (entityKey e, entityVal e))
+            r0map = mkMap records0
+            r1map = mkMap records1
+
+        Map.keys r0map
+            `shouldBe`
+                Map.keys r1map
+
+        void $ flip Map.traverseWithKey r0map $ \k a ->
+            Map.lookup k r1map
+                `shouldBe`
+                    Just a
+
+        void $ flip Map.traverseWithKey r1map $ \k a ->
+            Map.lookup k r0map
+                `shouldBe`
+                    Just a
 
 whileJust :: Monad m => a -> (a -> m (Maybe a)) -> m [a]
 whileJust a k = (a :) <$> do
