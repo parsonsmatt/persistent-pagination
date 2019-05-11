@@ -34,7 +34,7 @@ import           Control.Monad.Reader
 import           Data.Foldable
 import           Data.List              (foldl')
 import           Data.Maybe
-import           Data.Monoid
+import           Data.Monoid hiding ((<>))
 import           Data.Semigroup
 import           Database.Persist.Class
 import           Database.Persist.Sql
