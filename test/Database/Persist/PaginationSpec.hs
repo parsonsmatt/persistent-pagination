@@ -1,10 +1,12 @@
 {-# LANGUAGE QuasiQuotes #-}
+{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE UndecidableInstances #-}
 {-# LANGUAGE OverloadedStrings, MultiParamTypeClasses, GADTs, GeneralizedNewtypeDeriving #-}
 module Database.Persist.PaginationSpec where
 
+import Control.Monad.Reader
 import qualified Data.Set as Set
 import qualified Data.Map as Map
 import qualified Data.List as List
@@ -168,3 +170,25 @@ seedDatabase = do
             i <- choose (5, 20)
             vectorOf i arbitrary
         insert $ User str n ((50 * fromIntegral n) `addUTCTime` now)
+
+typeChecksWithSqlReadT
+    :: MonadIO m
+    => ConduitT Void (Entity User) (ReaderT SqlReadBackend m) ()
+typeChecksWithSqlReadT =
+    streamEntities
+        []
+        UserCreatedAt
+        (PageSize 10)
+        Descend
+        (Range Nothing Nothing)
+
+typeChecksWithSqlWriteT
+    :: MonadIO m
+    => ConduitT Void (Entity User) (ReaderT SqlWriteBackend m) ()
+typeChecksWithSqlWriteT =
+    streamEntities
+        []
+        UserCreatedAt
+        (PageSize 10)
+        Descend
+        (Range Nothing Nothing)
