@@ -28,13 +28,10 @@ module Database.Persist.Pagination where
 
 import           Conduit
 import           Control.Applicative
-import           Control.Applicative    (Const (..))
 import qualified Control.Foldl          as Foldl
-import           Control.Monad.Reader
-import           Data.Foldable
-import           Data.List              (foldl')
+import           Control.Monad.Reader (ReaderT)
+import           Data.Foldable (toList, forM_)
 import           Data.Maybe
-import           Data.Monoid hiding ((<>))
 import           Data.Semigroup
 import           Database.Persist.Class
 import           Database.Persist.Sql
@@ -240,7 +237,7 @@ getPage filts field pageSize sortOrder desiredRange = do
         minRange <- Foldl.premap (Just . Min . (^. fieldLens field)) Foldl.mconcat
         len <- Foldl.length
         pure Page
-            { pageRecords = rec : recs
+            { pageRecords = recs'
             , pageRange = fromMaybe rangeDefault $
                 Range <$> fmap getMin minRange <*> fmap getMax maxRange
             , pageDesiredRange = desiredRange
