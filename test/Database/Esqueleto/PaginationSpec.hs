@@ -165,7 +165,7 @@ spec = do
                     $ streamEntities
                         (\e -> e ^. UserAge ==. val searchAge)
                         UserCreatedAt
-                        (PageSize 3)
+                        (PageSize 1)
                         Descend
                         (Range Nothing Nothing)
                     .| sinkList
