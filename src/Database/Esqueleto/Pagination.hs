@@ -98,8 +98,8 @@ streamEntities filters field pageSize sortOrder range = do
         mpage <- lift (nextPage page)
         for_ mpage loop
 
--- | Convert a @'DesiredRange' typ@ into a list of 'Filter's for the query.
--- The 'DesiredRange' is treated as an exclusive range.
+-- | Convert a @'DesiredRange' typ@ into a 'SqlQuery' that operates on the
+-- range. The 'DesiredRange' is treated as an exclusive range.
 --
 -- @since 0.1.1.0
 rangeToFilters
@@ -221,6 +221,11 @@ nextPage Page{..}
 
 -- | A @'Page' record typ@ describes a list of records and enough
 -- information necessary to acquire the next page of records, if possible.
+--
+-- This is a distinct type from the 'Page' in "Database.Persist.Pagination"
+-- because the 'pageFilters' field needs a different type. As a result,
+-- some of this stuff is duplicated. It's possible that this can be fixed
+-- and more code could be shared.
 --
 -- @since 0.1.1.0
 data Page record typ
