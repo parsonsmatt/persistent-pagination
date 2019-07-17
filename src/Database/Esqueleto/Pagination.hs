@@ -24,12 +24,13 @@
 -- streaming out. Or, if you'd like finer control, you can use 'getPage'
 -- to get the first page of data, and then 'nextPage' to get the next
 -- possible page of data.
-module Database.Persist.Pagination
-    ( module Database.Persist.Pagination
+module Database.Esqueleto.Pagination
+    ( module Database.Esqueleto.Pagination
     , module Types
     ) where
 
 import           Conduit
+import           Control.Applicative
 import qualified Control.Foldl                     as Foldl
 import           Control.Monad.Reader              (ReaderT)
 import           Data.Foldable                     (for_, toList)
@@ -38,6 +39,12 @@ import           Data.Semigroup
 import           Database.Persist.Class
 import           Database.Persist.Sql
 import           Lens.Micro
+
+import           Database.Esqueleto                (SqlExpr, SqlQuery, Value,
+                                                    asc, desc, from, limit,
+                                                    orderBy, select, val,
+                                                    where_)
+import qualified Database.Esqueleto                as E
 
 import           Database.Persist.Pagination.Types as Types
 
@@ -53,16 +60,19 @@ import           Database.Persist.Pagination.Types as Types
 -- There's an open issue for 'selectSource' not working:
 -- <https://github.com/yesodweb/persistent/issues/657 GitHub Issue>.
 --
--- @since 0.1.0.0
+-- @since 0.1.1.0
 streamEntities
     :: forall record backend typ m a.
     ( PersistRecordBackend record backend
     , PersistQueryRead backend
+    , PersistUniqueRead backend
+    , BackendCompatible SqlBackend backend
+    , BackendCompatible SqlBackend (BaseBackend backend)
     , Ord typ
     , PersistField typ
     , MonadIO m
     )
-    => [Filter record]
+    => (SqlExpr (Entity record) -> SqlExpr (Value Bool))
     -- ^ The filters to apply.
     -> EntityField record typ
     -- ^ The field to sort on. This field should have an index on it, and
@@ -91,16 +101,18 @@ streamEntities filters field pageSize sortOrder range = do
 -- | Convert a @'DesiredRange' typ@ into a list of 'Filter's for the query.
 -- The 'DesiredRange' is treated as an exclusive range.
 --
--- @since 0.1.0.0
+-- @since 0.1.1.0
 rangeToFilters
-    :: PersistField typ
+    :: (PersistField typ, PersistEntity record)
     => Range (Maybe typ)
     -> EntityField record typ
-    -> [Filter record]
-rangeToFilters range field =
-    fmap (field >.) (toList (rangeMin range))
-    ++
-    fmap (field <.) (toList (rangeMax range))
+    -> SqlExpr (Entity record)
+    -> SqlQuery ()
+rangeToFilters range field sqlRec = do
+    for_ (rangeMin range) $ \m ->
+        where_ $ sqlRec E.^. field E.>. val m
+    for_ (rangeMax range) $ \m ->
+        where_ $ sqlRec E.^. field E.<. val m
 
 -- | Get the first 'Page' according to the given criteria. This returns
 -- a @'Maybe' 'Page'@, because there may not actually be any records that
@@ -111,16 +123,19 @@ rangeToFilters range field =
 -- This function gives you lower level control over pagination than the
 -- 'streamEntities' function.
 --
--- @since 0.1.0.0
+-- @since 0.1.1.0
 getPage
     :: forall record backend typ m.
     ( PersistRecordBackend record backend
     , PersistQueryRead backend
+    , PersistUniqueRead backend
+    , BackendCompatible SqlBackend backend
+    , BackendCompatible SqlBackend (BaseBackend backend)
     , Ord typ
     , PersistField typ
     , MonadIO m
     )
-    => [Filter record]
+    => (SqlExpr (Entity record) -> SqlExpr (Value Bool))
     -- ^ The filters to apply.
     -> EntityField record typ
     -- ^ The field to sort on. This field should have an index on it, and
@@ -138,19 +153,22 @@ getPage
     -- everything in the database.
     -> ReaderT backend m (Maybe (Page record typ))
 getPage filts field pageSize sortOrder desiredRange = do
-    erecs <- selectList filters selectOpts
+    erecs <-
+        select $
+        from $ \e -> do
+        where_ $ filts e
+        rangeToFilters desiredRange field e
+        limit (fromIntegral (unPageSize pageSize))
+        orderBy . pure $ case sortOrder of
+            Ascend  -> asc $ e E.^.field
+            Descend -> desc $ e E.^. field
+        pure e
     case erecs of
         [] ->
             pure Nothing
         rec:recs ->
             pure (Just (mkPage rec recs))
   where
-    selectOpts =
-        LimitTo (unPageSize pageSize) : case sortOrder of
-            Ascend  -> [Asc field]
-            Descend -> [Desc field]
-    filters =
-        filts <> rangeToFilters desiredRange field
     mkPage rec recs = flip Foldl.fold (rec:recs) $ do
         let recs' = rec : recs
             rangeDefault = initRange rec
@@ -177,11 +195,14 @@ getPage filts field pageSize sortOrder desiredRange = do
 
 -- | Retrieve the next 'Page' of data, if possible.
 --
--- @since 0.1.0.0
+-- @since 0.1.1.0
 nextPage
     ::
     ( PersistRecordBackend record backend
     , PersistQueryRead backend
+    , PersistUniqueRead backend
+    , BackendCompatible SqlBackend backend
+    , BackendCompatible SqlBackend (BaseBackend backend)
     , Ord typ
     , PersistField typ
     , MonadIO m
@@ -201,23 +222,23 @@ nextPage Page{..}
 -- | A @'Page' record typ@ describes a list of records and enough
 -- information necessary to acquire the next page of records, if possible.
 --
--- @since 0.1.0.0
+-- @since 0.1.1.0
 data Page record typ
     = Page
     { pageRecords      :: [Entity record]
     -- ^ The collection of records.
     --
-    -- @since 0.1.0.0
+    -- @since 0.1.1.0
     , pageRecordCount  :: Int
     -- ^ The count of records in the collection. If this number is less
     -- than the 'pageSize' field, then a call to 'nextPage' will result in
     -- 'Nothing'.
     --
-    -- @since 0.1.0.0
+    -- @since 0.1.1.0
     , pageRange        :: Range typ
     -- ^ The minimum and maximum value of @typ@ in the list.
     --
-    -- @since 0.1.0.0
+    -- @since 0.1.1.0
     , pageDesiredRange :: DesiredRange typ
     -- ^ The desired range in the next page of values. When the
     -- 'pageSortOrder' is 'Ascending', then the 'rangeMin' value will
@@ -225,7 +246,7 @@ data Page record typ
     -- when the 'pageSortOrder' is 'Descending', then the 'rangeMax' will
     -- decrease until the final page is reached.
     --
-    -- @since 0.1.0.0
+    -- @since 0.1.1.0
     , pageField        :: EntityField record typ
     -- ^ The field to sort on. This field should have an index on it, and
     -- ideally, the field should be monotonic - that is, you can only
@@ -234,11 +255,11 @@ data Page record typ
     -- keys can work too, but you may miss records that are inserted during
     -- a traversal.
     --
-    -- @since 0.1.0.0
-    , pageFilters      :: [Filter record]
+    -- @since 0.1.1.0
+    , pageFilters      :: SqlExpr (Entity record) -> SqlExpr (Value Bool)
     -- ^ The extra filters that are placed on the query.
     --
-    -- @since 0.1.0.0
+    -- @since 0.1.1.0
     , pageSize         :: PageSize
     -- ^ The desired size of the 'Page' for successive results.
     , pageSortOrder    :: SortOrder
@@ -246,6 +267,12 @@ data Page record typ
     -- order. The choice you make here determines how the
     -- 'pageDesiredRange' changes with each page.
     --
-    -- @since 0.1.0.0
+    -- @since 0.1.1.0
     }
 
+-- | An empty query value to pass to the functions when you don't have any
+-- filters to run.
+--
+-- @since 0.1.1.0
+emptyQuery :: SqlExpr (Entity record) -> SqlExpr (Value Bool)
+emptyQuery _ = val True
