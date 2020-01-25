@@ -1,7 +1,7 @@
 cabal-version: 1.12
 
 name:           persistent-pagination
-version:        0.1.1.0
+version:        0.1.1.1
 synopsis:       Efficient and correct pagination for persistent or esqueleto queries.
 description:    Please see the README on GitHub at <https://github.com/parsonsmatt/persistent-pagination#readme>
 homepage:       https://github.com/parsonsmatt/persistent-pagination#readme
@@ -67,3 +67,5 @@ test-suite persistent-pagination-test
     , QuickCheck
     , time
   default-language: Haskell2010
+  default-extensions:
+    DerivingStrategies, StandaloneDeriving
