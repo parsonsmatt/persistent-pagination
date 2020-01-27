@@ -53,7 +53,7 @@ matrix:
     compiler: ": #stack default"
     addons: {apt: {packages: [libgmp-dev]}}
 
-  - env: BUILD=stack ARGS="--resolver lts-12"
+  - env: BUILD=stack ARGS="--stack-yaml stack-8.4.yaml"
     compiler: ": #stack 8.4.4"
     addons: {apt: {packages: [libgmp-dev]}}
 
