@@ -1,4 +1,6 @@
+{-# LANGUAGE DataKinds                  #-}
 {-# LANGUAGE FlexibleContexts           #-}
+{-# LANGUAGE FlexibleInstances          #-}
 {-# LANGUAGE GADTs                      #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE MultiParamTypeClasses      #-}
@@ -7,6 +9,7 @@
 {-# LANGUAGE TemplateHaskell            #-}
 {-# LANGUAGE TypeFamilies               #-}
 {-# LANGUAGE UndecidableInstances       #-}
+
 module Database.Esqueleto.PaginationSpec where
 
 import           Conduit
@@ -14,18 +17,18 @@ import           Control.Concurrent
 import           Control.Monad
 import           Control.Monad.IO.Class
 import           Control.Monad.Reader
-import qualified Data.List                   as List
-import qualified Data.Map                    as Map
+import qualified Data.List                     as List
+import qualified Data.Map                      as Map
 import           Data.Maybe
-import qualified Data.Set                    as Set
+import qualified Data.Set                      as Set
 import           Data.Time
-import           Database.Persist.Sqlite hiding ((==.))
+import           Database.Persist.Sqlite       hiding ((==.))
 import           Database.Persist.TH
 import           Test.Hspec
 import           Test.QuickCheck
 
+import           Database.Esqueleto            (val, (==.), (^.))
 import           Database.Esqueleto.Pagination
-import           Database.Esqueleto (val, (==.), (^.))
 
 share [mkPersist sqlSettings, mkMigrate "migrateAll"] [persistUpperCase|
 

@@ -1,28 +1,34 @@
-{-# LANGUAGE QuasiQuotes #-}
-{-# LANGUAGE FlexibleContexts #-}
-{-# LANGUAGE TemplateHaskell #-}
-{-# LANGUAGE TypeFamilies #-}
-{-# LANGUAGE UndecidableInstances #-}
-{-# LANGUAGE OverloadedStrings, MultiParamTypeClasses, GADTs, GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE DataKinds                  #-}
+{-# LANGUAGE FlexibleContexts           #-}
+{-# LANGUAGE FlexibleInstances          #-}
+{-# LANGUAGE GADTs                      #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE MultiParamTypeClasses      #-}
+{-# LANGUAGE OverloadedStrings          #-}
+{-# LANGUAGE QuasiQuotes                #-}
+{-# LANGUAGE TemplateHaskell            #-}
+{-# LANGUAGE TypeFamilies               #-}
+{-# LANGUAGE UndecidableInstances       #-}
+
 module Database.Persist.PaginationSpec where
 
-import Control.Monad.Reader
-import qualified Data.Set as Set
-import qualified Data.Map as Map
-import qualified Data.List as List
-import Control.Concurrent
-import Conduit
-import Data.Maybe
-import Control.Monad.IO.Class
-import Test.Hspec
-import Test.QuickCheck
-import Control.Monad
-import Database.Persist.TH
-import Database.Persist.Sql
-import Database.Persist.Sqlite
-import Data.Time
+import           Conduit
+import           Control.Concurrent
+import           Control.Monad
+import           Control.Monad.IO.Class
+import           Control.Monad.Reader
+import qualified Data.List                   as List
+import qualified Data.Map                    as Map
+import           Data.Maybe
+import qualified Data.Set                    as Set
+import           Data.Time
+import           Database.Persist.Sql
+import           Database.Persist.Sqlite
+import           Database.Persist.TH
+import           Test.Hspec
+import           Test.QuickCheck
 
-import Database.Persist.Pagination
+import           Database.Persist.Pagination
 
 share [mkPersist sqlSettings, mkMigrate "migrateAll"] [persistUpperCase|
 
