@@ -5,7 +5,6 @@
 module Database.Persist.Pagination.Types where
 
 import Control.Applicative (Alternative(..))
-import           Database.Persist.Sql (Entity)
 
 -- | The amount of records in a 'Page' of results.
 --

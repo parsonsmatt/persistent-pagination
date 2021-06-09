@@ -33,7 +33,7 @@ library
   build-depends:
       base              >= 4.11     && < 5
     , conduit           >= 1.2.8    && < 1.4
-    , esqueleto         
+    , esqueleto         >= 3.5
     , foldl                            < 1.5.0
     , microlens                        < 0.5
     , mtl                              < 3
