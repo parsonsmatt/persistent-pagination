@@ -1,5 +1,9 @@
 # Changelog for persistent-pagination
 
+## (unreleased)
+
+- Relax `microlens` upper bound to 0.6
+
 ## 0.1.1.2
 
 - Fix test suite for `persistent-2.11` support.
