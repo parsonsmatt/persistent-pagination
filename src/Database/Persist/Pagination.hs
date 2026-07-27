@@ -32,6 +32,7 @@ module Database.Persist.Pagination
 import           Conduit
 import qualified Control.Foldl                     as Foldl
 import           Control.Monad.Reader              (ReaderT)
+import           Data.Conduit.Combinators          as C
 import           Data.Foldable                     (for_, toList)
 import           Data.Maybe
 import           Data.Semigroup
@@ -79,12 +80,42 @@ streamEntities
     -- ^ The desired range. Provide @'Range' Nothing Nothing@ if you want
     -- everything in the database.
     -> ConduitT a (Entity record) (ReaderT backend m) ()
-streamEntities filters field pageSize sortOrder range = do
+streamEntities filters field pageSize sortOrder range = 
+  streamEntitiesChunks filters field pageSize sortOrder range
+    .| C.concat
+
+-- Same as 'streamEntities', but send entire pages down the conduit.
+streamEntitiesChunks
+    :: forall record backend typ m a.
+    ( PersistRecordBackend record backend
+    , PersistQueryRead backend
+    , Ord typ
+    , PersistField typ
+    , MonadIO m
+    )
+    => [Filter record]
+    -- ^ The filters to apply.
+    -> EntityField record typ
+    -- ^ The field to sort on. This field should have an index on it, and
+    -- ideally, the field should be monotonic - that is, you can only
+    -- insert values at either extreme end of the range. A @created_at@
+    -- timestamp or autoincremented ID work great for this. Non-monotonic
+    -- keys can work too, but you may miss records that are inserted during
+    -- a traversal.
+    -> PageSize
+    -- ^ How many records in a page
+    -> SortOrder
+    -- ^ Ascending or descending
+    -> DesiredRange typ
+    -- ^ The desired range. Provide @'Range' Nothing Nothing@ if you want
+    -- everything in the database.
+    -> ConduitT a [Entity record] (ReaderT backend m) ()
+streamEntitiesChunks filters field pageSize sortOrder range = do
     mpage <- lift (getPage filters field pageSize sortOrder range)
     for_ mpage loop
   where
     loop page = do
-        yieldMany (pageRecords page)
+        yield (pageRecords page)
         mpage <- lift (nextPage page)
         for_ mpage loop
 
