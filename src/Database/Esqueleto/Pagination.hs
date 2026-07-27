@@ -4,9 +4,13 @@
 {-# LANGUAGE DeriveTraversable   #-}
 {-# LANGUAGE FlexibleContexts    #-}
 {-# LANGUAGE GADTs               #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE RankNTypes          #-}
 {-# LANGUAGE RecordWildCards     #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TypeApplications    #-}
+{-# LANGUAGE TypeOperators       #-}
+{-# LANGUAGE UndecidableInstances #-}
 
 -- | This module provides efficient pagination over your database queries.
 -- No @OFFSET@ here - we use ranges to do this right!
@@ -30,23 +34,71 @@ module Database.Esqueleto.Pagination
     ) where
 
 import           Conduit
-import           Control.Applicative
 import qualified Control.Foldl                     as Foldl
 import           Control.Monad.Reader              (ReaderT)
-import           Data.Foldable                     (for_, toList)
+import           Data.Foldable                     (for_)
 import           Data.Maybe
+import           Data.Proxy                        (Proxy(..))
 import           Data.Semigroup
 import           Database.Persist.Class
 import           Database.Persist.Sql
 import           Lens.Micro
 
-import           Database.Esqueleto                (SqlExpr, SqlQuery, Value,
-                                                    asc, desc, from, limit,
-                                                    orderBy, select, val,
-                                                    where_)
-import qualified Database.Esqueleto                as E
+import           Database.Esqueleto.Experimental    (SqlExpr, SqlQuery, Value,
+                                                    asc, desc, limit, orderBy,
+                                                    select, val, where_)
+import           Database.Esqueleto.Experimental.From (ToFrom, from, table)
+import qualified Database.Esqueleto.Experimental    as E
+import qualified Database.Esqueleto.Internal.Internal as E.I.I
 
 import           Database.Persist.Pagination.Types as Types
+
+data SqlField select record typ = SqlField
+  { sqlAccessor :: select -> SqlExpr (Value typ)
+  , haskellAccessor :: record -> typ
+  }
+
+entityField
+  :: forall record typ.
+  ( PersistEntity record
+  , PersistField typ
+  )
+  => EntityField record typ
+  -> SqlField (SqlExpr (Entity record)) (Entity record) typ
+entityField field = SqlField
+  { sqlAccessor = (E.^. field)
+  , haskellAccessor = (^. fieldLens field)
+  }
+
+joinLeft
+  :: SqlField selectLeft left typ
+  -> SqlField (selectLeft E.:& selectRight) (left E.:& right) typ
+joinLeft innerField = SqlField
+  { sqlAccessor = \(left E.:& _) -> sqlAccessor innerField left
+  , haskellAccessor = \(left E.:& _) -> haskellAccessor innerField left
+  }
+
+joinRight
+  :: SqlField selectRight right typ
+  -> SqlField (selectLeft E.:& selectRight) (left E.:& right) typ
+joinRight innerField = SqlField
+  { sqlAccessor = \(_ E.:& right) -> sqlAccessor innerField right
+  , haskellAccessor = \(_ E.:& right) -> haskellAccessor innerField right
+  }
+
+toJoin :: (a, b) -> (a E.:& b)
+toJoin (a, b) = (a E.:& b)
+
+fromJoin :: (a E.:& b) -> (a, b)
+fromJoin (a E.:& b) = (a, b)
+
+instance (E.I.I.SqlSelect a ra, E.I.I.SqlSelect b rb) => E.I.I.SqlSelect (a E.:& b) (ra E.:& rb) where
+    sqlSelectCols esc = E.I.I.sqlSelectCols esc . fromJoin
+    sqlSelectColCount = E.I.I.sqlSelectColCount . fromJoinProxy
+      where
+        fromJoinProxy :: Proxy (a E.:& b) -> Proxy (a, b)
+        fromJoinProxy Proxy = Proxy
+    sqlSelectProcessRow = fmap toJoin . E.I.I.sqlSelectProcessRow
 
 -- | Stream entities out of the database, only pulling a limited amount
 -- into memory at a time.
@@ -89,13 +141,35 @@ streamEntities
     -- ^ The desired range. Provide @'Range' Nothing Nothing@ if you want
     -- everything in the database.
     -> ConduitT a (Entity record) (ReaderT backend m) ()
-streamEntities filters field pageSize sortOrder range = do
-    mpage <- lift (getPage filters field pageSize sortOrder range)
+streamEntities filters field =
+  streamFrom (table @record) filters (entityField field)
+
+streamFrom
+    :: forall source select record backend typ m i.
+    ( ToFrom source select
+    , E.I.I.SqlSelect select record
+    , PersistQueryRead backend
+    , PersistUniqueRead backend
+    , BackendCompatible SqlBackend backend
+    , BackendCompatible SqlBackend (BaseBackend backend)
+    , Ord typ
+    , PersistField typ
+    , MonadIO m
+    )
+    => source
+    -> (select -> SqlExpr (Value Bool))
+    -> SqlField select record typ
+    -> PageSize
+    -> SortOrder
+    -> DesiredRange typ
+    -> ConduitT i record (ReaderT backend m) ()
+streamFrom source filters sortKey pageSize sortOrder range = do
+    mpage <- lift (getPage source filters sortKey pageSize sortOrder range)
     for_ mpage loop
   where
     loop page = do
         yieldMany (pageRecords page)
-        mpage <- lift (nextPage page)
+        mpage <- lift (nextPage source page)
         for_ mpage loop
 
 -- | Convert a @'DesiredRange' typ@ into a 'SqlQuery' that operates on the
@@ -103,16 +177,16 @@ streamEntities filters field pageSize sortOrder range = do
 --
 -- @since 0.1.1.0
 rangeToFilters
-    :: (PersistField typ, PersistEntity record)
+    :: (PersistField typ)
     => Range (Maybe typ)
-    -> EntityField record typ
-    -> SqlExpr (Entity record)
+    -> SqlField select record typ
+    -> select
     -> SqlQuery ()
 rangeToFilters range field sqlRec = do
     for_ (rangeMin range) $ \m ->
-        where_ $ sqlRec E.^. field E.>. val m
+        where_ $ sqlAccessor field sqlRec E.>. val m
     for_ (rangeMax range) $ \m ->
-        where_ $ sqlRec E.^. field E.<. val m
+        where_ $ sqlAccessor field sqlRec E.<. val m
 
 -- | Get the first 'Page' according to the given criteria. This returns
 -- a @'Maybe' 'Page'@, because there may not actually be any records that
@@ -125,8 +199,9 @@ rangeToFilters range field sqlRec = do
 --
 -- @since 0.1.1.0
 getPage
-    :: forall record backend typ m.
-    ( PersistRecordBackend record backend
+    :: forall source select record backend typ m.
+    ( ToFrom source select
+    , E.I.I.SqlSelect select record
     , PersistQueryRead backend
     , PersistUniqueRead backend
     , BackendCompatible SqlBackend backend
@@ -135,33 +210,33 @@ getPage
     , PersistField typ
     , MonadIO m
     )
-    => (SqlExpr (Entity record) -> SqlExpr (Value Bool))
+    => source
+    -> (select -> SqlExpr (Value Bool))
     -- ^ The filters to apply.
-    -> EntityField record typ
+    -> SqlField select record typ
     -- ^ The field to sort on. This field should have an index on it, and
     -- ideally, the field should be monotonic - that is, you can only
     -- insert values at either extreme end of the range. A @created_at@
     -- timestamp or autogenerated ID work great for this. Non-monotonic
     -- keys can work too, but you may miss records that are inserted during
-    -- a traversal.
+    -- source traversal.
     -> PageSize
-    -- ^ How many records in a page
+    -- ^ How many records in source page
     -> SortOrder
     -- ^ Ascending or descending
     -> DesiredRange typ
     -- ^ The desired range. Provide @'Range' Nothing Nothing@ if you want
     -- everything in the database.
-    -> ReaderT backend m (Maybe (Page record typ))
-getPage filts field pageSize sortOrder desiredRange = do
-    erecs <-
-        select $
-        from $ \e -> do
+    -> ReaderT backend m (Maybe (Page select record typ))
+getPage source filts field pageSize sortOrder desiredRange = do
+    erecs <- select $ do
+        e <- from source
         where_ $ filts e
         rangeToFilters desiredRange field e
         limit (fromIntegral (unPageSize pageSize))
         orderBy . pure $ case sortOrder of
-            Ascend  -> asc $ e E.^.field
-            Descend -> desc $ e E.^. field
+            Ascend  -> asc $ sqlAccessor field e
+            Descend -> desc $ sqlAccessor field e
         pure e
     case erecs of
         [] ->
@@ -172,8 +247,8 @@ getPage filts field pageSize sortOrder desiredRange = do
     mkPage rec recs = flip Foldl.fold (rec:recs) $ do
         let recs' = rec : recs
             rangeDefault = initRange rec
-        maxRange <- Foldl.premap (Just . Max . (^. fieldLens field)) Foldl.mconcat
-        minRange <- Foldl.premap (Just . Min . (^. fieldLens field)) Foldl.mconcat
+        maxRange <- Foldl.premap (Just . Max . (haskellAccessor field)) Foldl.mconcat
+        minRange <- Foldl.premap (Just . Min . (haskellAccessor field)) Foldl.mconcat
         len <- Foldl.length
         pure Page
             { pageRecords = recs'
@@ -186,11 +261,11 @@ getPage filts field pageSize sortOrder desiredRange = do
             , pageRecordCount = len
             , pageSortOrder = sortOrder
             }
-    initRange :: Entity record -> Range typ
+    initRange :: record -> Range typ
     initRange rec =
         Range
-            { rangeMin = rec ^. fieldLens field
-            , rangeMax = rec ^. fieldLens field
+            { rangeMin = haskellAccessor field rec
+            , rangeMax = haskellAccessor field rec
             }
 
 -- | Retrieve the next 'Page' of data, if possible.
@@ -198,7 +273,8 @@ getPage filts field pageSize sortOrder desiredRange = do
 -- @since 0.1.1.0
 nextPage
     ::
-    ( PersistRecordBackend record backend
+    ( ToFrom source select
+    , E.I.I.SqlSelect select record
     , PersistQueryRead backend
     , PersistUniqueRead backend
     , BackendCompatible SqlBackend backend
@@ -207,12 +283,13 @@ nextPage
     , PersistField typ
     , MonadIO m
     )
-    => Page record typ -> ReaderT backend m (Maybe (Page record typ))
-nextPage Page{..}
+    => source -> Page select record typ -> ReaderT backend m (Maybe (Page select record typ))
+nextPage source Page{..}
     | pageRecordCount < unPageSize pageSize =
         pure Nothing
     | otherwise =
         getPage
+            source
             pageFilters
             pageField
             pageSize
@@ -228,9 +305,9 @@ nextPage Page{..}
 -- and more code could be shared.
 --
 -- @since 0.1.1.0
-data Page record typ
+data Page select record typ
     = Page
-    { pageRecords      :: [Entity record]
+    { pageRecords      :: [record]
     -- ^ The collection of records.
     --
     -- @since 0.1.1.0
@@ -252,7 +329,7 @@ data Page record typ
     -- decrease until the final page is reached.
     --
     -- @since 0.1.1.0
-    , pageField        :: EntityField record typ
+    , pageField        :: SqlField select record typ
     -- ^ The field to sort on. This field should have an index on it, and
     -- ideally, the field should be monotonic - that is, you can only
     -- insert values at either extreme end of the range. A @created_at@
@@ -261,7 +338,7 @@ data Page record typ
     -- a traversal.
     --
     -- @since 0.1.1.0
-    , pageFilters      :: SqlExpr (Entity record) -> SqlExpr (Value Bool)
+    , pageFilters      :: select -> SqlExpr (Value Bool)
     -- ^ The extra filters that are placed on the query.
     --
     -- @since 0.1.1.0
@@ -279,5 +356,5 @@ data Page record typ
 -- filters to run.
 --
 -- @since 0.1.1.0
-emptyQuery :: SqlExpr (Entity record) -> SqlExpr (Value Bool)
+emptyQuery :: select -> SqlExpr (Value Bool)
 emptyQuery _ = val True

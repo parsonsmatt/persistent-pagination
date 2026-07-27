@@ -7,6 +7,7 @@
 {-# LANGUAGE OverloadedStrings          #-}
 {-# LANGUAGE QuasiQuotes                #-}
 {-# LANGUAGE TemplateHaskell            #-}
+{-# LANGUAGE TypeApplications           #-}
 {-# LANGUAGE TypeFamilies               #-}
 {-# LANGUAGE UndecidableInstances       #-}
 
@@ -27,7 +28,8 @@ import           Database.Persist.TH
 import           Test.Hspec
 import           Test.QuickCheck
 
-import           Database.Esqueleto            (val, (==.), (^.))
+import           Database.Esqueleto.Experimental (innerJoin, on, table, val,
+                                                 (==.), (^.), (:&)(..))
 import           Database.Esqueleto.Pagination
 
 share [mkPersist sqlSettings, mkMigrate "migrateAll"] [persistUpperCase|
@@ -35,6 +37,13 @@ share [mkPersist sqlSettings, mkMigrate "migrateAll"] [persistUpperCase|
 User
     name String
     age  Int
+    createdAt UTCTime
+
+    deriving Eq Ord Show
+
+Pet
+    name String
+    owner String
     createdAt UTCTime
 
     deriving Eq Ord Show
@@ -75,8 +84,9 @@ spec = do
 
     it "getPage" $ do
         let pgSize = 10
+            source = table @User
         Just page <- runDb $ do
-            getPage emptyQuery UserCreatedAt (PageSize pgSize) Ascend (Range Nothing Nothing :: DesiredRange UTCTime)
+            getPage source emptyQuery (entityField UserCreatedAt) (PageSize pgSize) Ascend (Range Nothing Nothing :: DesiredRange UTCTime)
         let records1 = pageRecords page
         length records1
             `shouldBe`
@@ -87,7 +97,7 @@ spec = do
         let mmin = rangeMin (pageRange page)
 
         mpage2 <- runDb $ do
-            nextPage page
+            nextPage source page
 
         void mpage2 `shouldSatisfy` isJust
 
@@ -107,9 +117,10 @@ spec = do
 
     it "works for all pages" $ do
         pages <- runDb $ do
+            let source = table @User
             Just page <-
-                getPage emptyQuery UserCreatedAt (PageSize 10) Ascend (Range Nothing Nothing :: DesiredRange UTCTime)
-            whileJust page nextPage
+                getPage source emptyQuery (entityField UserCreatedAt) (PageSize 10) Ascend (Range Nothing Nothing :: DesiredRange UTCTime)
+            whileJust page (nextPage source)
         let sortedKeys =
                 List.sort (concatMap (map entityKey . pageRecords) pages)
 
@@ -191,6 +202,23 @@ spec = do
             `shouldBe`
                 Set.fromList properUserIds
 
+    it "streams from JOIN" $ do
+        xs <- runDb $ do
+            runConduit
+                $ streamFrom
+                    (table @User `innerJoin` table @Pet
+                      `on` (\(user :& pet) -> user ^. UserName ==. pet ^. PetOwner))
+                    emptyQuery
+                    (joinRight $ entityField PetCreatedAt)
+                    (PageSize 10)
+                    Ascend
+                    (Range Nothing Nothing)
+                .| sinkList
+        length xs `shouldBe` entityCount
+        Set.toList (Set.fromList (map (\(_ :& pet) -> entityKey pet) xs))
+            `shouldBe`
+                List.sort (map (\(_ :& pet) -> entityKey pet) xs)
+
 whileJust :: Monad m => a -> (a -> m (Maybe a)) -> m [a]
 whileJust a k = (a :) <$> do
     ma <- k a
@@ -212,11 +240,15 @@ entityCount = 63
 seedDatabase :: SqlPersistM ()
 seedDatabase = do
     let now = UTCTime (fromGregorian 1990 1 1) 0
-    forM_ [1..entityCount] $ \n -> do
-        str <- liftIO $ generate $ do
+    let randomName = liftIO $ generate $ do
             i <- choose (5, 20)
             vectorOf i arbitrary
-        insert $ User str n ((50 * fromIntegral n) `addUTCTime` now)
+
+    forM_ [1..entityCount] $ \n -> do
+        userName <- randomName
+        petName <- randomName
+        insert $ User userName n ((50 * fromIntegral n) `addUTCTime` now)
+        insert $ Pet petName userName ((37 * fromIntegral n) `addUTCTime` now)
 
 typeChecksWithSqlReadT
     :: MonadIO m
